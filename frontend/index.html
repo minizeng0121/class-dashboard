@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>班級經營儀表板（原型）</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="display-body">
+
+<header class="app-bar">
+  <span class="app-bar-title">班級經營儀表板</span>
+  <button type="button" id="teacherLoginBtn" class="teacher-login-btn">🔒 教師登入</button>
+</header>
+
+<!-- ===== 學生前台（預設畫面，鏡射投影就是看這個） ===== -->
+<div id="displayScreen" class="screen">
+
+  <div id="d-waitingState" class="display-state display-state-centered">
+    <div class="card"><h1>等待課堂開始…</h1></div>
+  </div>
+
+  <div id="d-activeState" class="display-state display-page" hidden>
+    <h1 class="d-class-name" id="d-className"></h1>
+
+    <div class="display-grid">
+      <section class="card light-card">
+        <div class="current-light-hero">
+          <span class="dot-big" id="d-lightDot"></span>
+          <span class="light-text-big" id="d-lightText">尚未設定</span>
+          <span class="light-text-sub" id="d-lightSub"></span>
+        </div>
+        <p class="card-subtitle mt">本節燈號紀錄</p>
+        <div class="light-history light-history-big" id="d-lightHistory"></div>
+      </section>
+
+      <div class="display-main">
+        <section class="help-flow-card">
+          👂 先聽 → 👀 先看課本講義 → 🧪 先試 → 👥 互相幫忙 → 🙋 再找老師
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">小組自主狀態</h2>
+          <div class="groups-display" id="d-groupsSection"></div>
+        </section>
+      </div>
+    </div>
+
+    <section class="card achievements-display-card">
+      <h2 class="card-title">🎱 特殊表現</h2>
+      <div class="ach-track" id="d-achTrack"></div>
+    </section>
+
+    <div class="sync-banner" id="d-syncBanner" hidden></div>
+  </div>
+
+  <div id="d-endedState" class="display-state display-state-centered" hidden>
+    <div class="card">
+      <h1>本節課已結束</h1>
+      <p class="page-subtitle" style="margin-top:0.6rem;">老師要開始新的一堂課嗎？</p>
+      <button type="button" id="endedLoginBtn" class="btn btn-primary" style="margin-top:1.2rem;">🔒 教師登入</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ===== 密碼登入視窗 ===== -->
+<div id="passwordModal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <h2 class="card-title">教師登入</h2>
+    <p class="card-subtitle">請輸入教師密碼（原型示範用，非真正帳號驗證）</p>
+    <label class="field">
+      <span>密碼</span>
+      <input type="password" id="passwordInput" autocomplete="off">
+    </label>
+    <p class="field-error" id="passwordError" hidden>密碼錯誤，請再試一次</p>
+    <div class="modal-actions">
+      <button type="button" id="passwordCancelBtn" class="btn btn-secondary">取消</button>
+      <button type="button" id="passwordSubmitBtn" class="btn btn-primary">登入</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 教師控制台（密碼通過後才看得到） ===== -->
+<div id="teacherScreen" class="screen" hidden>
+
+  <div id="startScreen" class="page" hidden>
+    <h1 class="page-title">開始課堂</h1>
+    <p class="page-subtitle">原型示範：資料只存在這台瀏覽器裡，還沒有接真正的後端。</p>
+
+    <div class="card">
+      <label class="field">
+        <span>選擇班級</span>
+        <select id="classSelect"></select>
+      </label>
+
+      <label class="field">
+        <span>小組數量</span>
+        <input type="number" id="groupCount" min="1" max="8" value="5">
+      </label>
+
+      <button type="button" id="startBtn" class="btn btn-primary btn-block">開始本節課</button>
+    </div>
+
+    <button type="button" id="backToDisplayFromStartBtn" class="back-to-display-btn" style="margin-top:1rem;">↩ 返回投影畫面</button>
+  </div>
+
+  <div id="consoleScreen" class="screen page console-page" hidden>
+
+    <header class="console-top">
+      <div>
+        <h1 id="className" class="page-title"></h1>
+        <p id="startedAtText" class="page-subtitle"></p>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.6rem;">
+        <div class="sync-badge" id="syncBadge">已同步</div>
+        <button type="button" id="backToDisplayBtn" class="back-to-display-btn">↩ 返回投影畫面</button>
+      </div>
+    </header>
+
+    <div class="console-grid">
+      <section class="card lights-card">
+        <h2 class="card-title">班級秩序</h2>
+
+        <div class="teacher-preview" id="teacherPreview">
+          <span class="dot-mini" id="previewDot"></span>
+          <div>
+            <p class="teacher-preview-label">學生現在看到</p>
+            <p class="teacher-preview-text" id="previewText">尚未設定</p>
+          </div>
+        </div>
+
+        <p class="card-subtitle mt">點一下記錄目前燈號</p>
+        <div class="light-buttons">
+          <button type="button" class="light-btn" data-color="green">
+            <span class="dot dot-green"></span>綠燈
+          </button>
+          <button type="button" class="light-btn" data-color="yellow">
+            <span class="dot dot-yellow"></span>黃燈
+          </button>
+          <button type="button" class="light-btn" data-color="red">
+            <span class="dot dot-red"></span>紅燈
+          </button>
+        </div>
+
+        <p class="card-subtitle mt">本節燈號紀錄（點一筆可更正）</p>
+        <div class="light-history light-history-editable" id="lightHistory"></div>
+
+        <div class="correct-picker" id="correctPicker" hidden>
+          <p class="correct-hint" id="correctHint"></p>
+          <div class="correct-picker-buttons">
+            <button type="button" class="light-btn correct-btn" data-color="green">
+              <span class="dot dot-green"></span>綠燈
+            </button>
+            <button type="button" class="light-btn correct-btn" data-color="yellow">
+              <span class="dot dot-yellow"></span>黃燈
+            </button>
+            <button type="button" class="light-btn correct-btn" data-color="red">
+              <span class="dot dot-red"></span>紅燈
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card groups-card">
+        <h2 class="card-title">小組自主狀態</h2>
+        <p class="card-subtitle">點第幾顆星，就直接設定第幾星；每組獨立增減 💡</p>
+        <div class="groups-section" id="groupsSection"></div>
+      </section>
+    </div>
+
+    <section class="card achievements-card">
+      <h2 class="card-title">🎱 特殊表現</h2>
+      <p class="card-subtitle">輸入座號，點選類型即可新增一顆球；點下方已加入的球可移除</p>
+      <div class="ach-input-row">
+        <input type="number" id="achSeatInput" min="1" max="99" placeholder="座號">
+        <button type="button" id="achQuestionBtn" class="btn btn-secondary">🎱 好問題</button>
+        <button type="button" id="achHelpBtn" class="btn btn-secondary">⚫ 幫助別人</button>
+      </div>
+      <div class="ach-track" id="achTrack"></div>
+    </section>
+
+    <div class="demo-tools">
+      <label>
+        <span>Demo：手動測試同步狀態</span>
+        <select id="demoSyncSelect">
+          <option value="synced">已同步</option>
+          <option value="syncing">同步中</option>
+          <option value="offline">離線，操作等待同步</option>
+          <option value="error">同步失敗，請重試</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="undo-bar" id="undoBar" hidden>
+      <span id="undoText"></span>
+      <button type="button" id="undoBtn" class="btn btn-small">復原</button>
+    </div>
+
+    <footer class="console-footer">
+      <button type="button" id="endSessionBtn" class="btn btn-danger">結束課堂</button>
+    </footer>
+  </div>
+
+</div>
+
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
