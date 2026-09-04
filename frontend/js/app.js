@@ -1,8 +1,4 @@
 (function () {
-  // Demo 用固定密碼，只是為了擋掉學生隨手亂點教師控制台，不是真正的帳號驗證。
-  // 之後接上真正後端時，這裡要換成規格文件裡的 Google 帳號登入。
-  var TEACHER_PIN = '1234';
-
   var STARS_LABEL = { 3: '有效的自主合作中！', 2: '逐漸進入軌道', 1: '需要較多支持' };
   var LIGHT_CHIP_LABEL = { green: '綠', yellow: '黃', red: '紅' };
   var LIGHT_TEXT = { green: '目前綠燈', yellow: '目前黃燈', red: '目前紅燈' };
@@ -13,10 +9,11 @@
     red: '目前像進到菜市場'
   };
   var SYNC_LABEL = {
+    idle: '已同步',
     synced: '已同步',
     syncing: '同步中',
-    offline: '離線，操作等待同步',
-    error: '同步失敗，請重試'
+    offline: '離線，點一下重試',
+    error: '同步失敗，點一下重試'
   };
   var ACTION_LABEL = {
     stars: '剛調整了小組星級',
@@ -27,13 +24,17 @@
   var BALL_COLORS = ['#e15c4e', '#e2833c', '#d9a83c', '#3cae6c', '#2aa398', '#4a86c2', '#8268b8', '#db6f95'];
 
   var mode = 'display'; // 'display'（預設，學生看的）｜'teacher'（密碼通過後）
-  var session = Store.loadSession();
+  var session = null;
+  var loadError = null;
+  var syncState = 'idle'; // 'idle'｜'syncing'｜'synced'｜'offline'｜'error'
+  var pendingRetry = null;
   var undoTimer = null;
   var correctingIndex = null; // null＝沒有在更正；否則是「本節燈號紀錄」清單裡正在更正的那筆索引
 
   var displayScreen = document.getElementById('displayScreen');
   var teacherScreen = document.getElementById('teacherScreen');
   var startScreen = document.getElementById('startScreen');
+  var startError = document.getElementById('startError');
   var consoleScreen = document.getElementById('consoleScreen');
   var groupsSection = document.getElementById('groupsSection');
   var classSelect = document.getElementById('classSelect');
@@ -41,7 +42,6 @@
   var undoBar = document.getElementById('undoBar');
   var undoText = document.getElementById('undoText');
   var syncBadge = document.getElementById('syncBadge');
-  var demoSyncSelect = document.getElementById('demoSyncSelect');
 
   var passwordModal = document.getElementById('passwordModal');
   var passwordInput = document.getElementById('passwordInput');
@@ -53,6 +53,63 @@
     opt.textContent = name;
     classSelect.appendChild(opt);
   });
+
+  // ---------- 跟後端溝通：統一的「送出動作」流程 ----------
+  // 樂觀更新只做到「立刻顯示同步中」，實際資料一律以後端回傳的最新狀態為準
+  // （對應文件 15.3：後端不得靜默覆蓋較新資料，前端也不憑空推測結果）。
+
+  function performAction(promiseFactory) {
+    syncState = 'syncing';
+    pendingRetry = function () { performAction(promiseFactory); };
+    renderSyncBadge();
+
+    promiseFactory().then(function (res) {
+      if (res.ok) {
+        pendingRetry = null;
+        session = res.data;
+        syncState = 'synced';
+        render();
+      } else if (res.error === 'revision_conflict') {
+        pendingRetry = null;
+        session = res.data;
+        syncState = 'synced';
+        render();
+        alert('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
+      } else if (res.error === 'invalid_pin') {
+        pendingRetry = null;
+        syncState = 'error';
+        render();
+        alert('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
+      } else {
+        syncState = 'error';
+        render();
+      }
+    }).catch(function () {
+      syncState = navigator.onLine ? 'error' : 'offline';
+      render();
+    });
+  }
+
+  // 分頁重新可見時呼叫：失敗就靜默略過，畫面維持最後一次成功取得的資料（對應文件 16.2）。
+  function refreshSession() {
+    Store.getCurrentSession().then(function (data) {
+      session = data;
+      loadError = null;
+      render();
+    }).catch(function () {});
+  }
+
+  // 頁面第一次載入呼叫：失敗要讓教師看得出「連不上後端」，不能悄悄停在等待畫面。
+  function initialLoad() {
+    Store.getCurrentSession().then(function (data) {
+      session = data;
+      loadError = null;
+      render();
+    }).catch(function (err) {
+      loadError = err;
+      render();
+    });
+  }
 
   // ---------- 整體畫面切換 ----------
 
@@ -73,8 +130,14 @@
     active.hidden = true;
     ended.hidden = true;
 
-    if (!session) { waiting.hidden = false; return; }
-    if (session.status === 'ended') { ended.hidden = false; return; }
+    if (!session) {
+      waiting.hidden = false;
+      waiting.querySelector('h1').textContent = loadError
+        ? '無法連線到後端，請確認網路連線或 js/config.js 的 API_URL 設定'
+        : '等待課堂開始…';
+      return;
+    }
+    if (session.status === 'completed') { ended.hidden = false; return; }
 
     active.hidden = false;
     document.getElementById('d-className').textContent = session.className;
@@ -113,7 +176,7 @@
     renderAchievements(session, 'd-achTrack');
 
     var banner = document.getElementById('d-syncBanner');
-    if (session.syncDemoState === 'offline' || session.syncDemoState === 'error') {
+    if (syncState === 'offline' || syncState === 'error') {
       banner.hidden = false;
       banner.textContent = '暫時無法同步，目前顯示的是最後一次成功取得的資料';
     } else {
@@ -146,7 +209,6 @@
     return html;
   }
 
-  // 舊版本開的課堂可能沒有 achievements 欄位，這裡用 || [] 防呆，不做資料遷移。
   function renderAchievements(s, elId) {
     var trackEl = document.getElementById(elId);
     var list = s.achievements || [];
@@ -171,10 +233,15 @@
   // ---------- 教師控制台（密碼通過後） ----------
 
   function renderTeacher() {
-    var showConsole = !!session && session.status !== 'ended';
+    var showConsole = !!session && session.status !== 'completed';
     startScreen.hidden = showConsole;
     consoleScreen.hidden = !showConsole;
-    if (!showConsole) return;
+    if (!showConsole) {
+      // 開課失敗時（例如連不上後端）在這裡給提示，不能只靠 syncBadge——
+      // 那個徽章只存在於 consoleScreen 裡，這個畫面還沒有 session 可以進到那裡。
+      startError.hidden = !(syncState === 'error' || syncState === 'offline');
+      return;
+    }
 
     document.getElementById('className').textContent = session.className;
     document.getElementById('startedAtText').textContent =
@@ -189,9 +256,12 @@
   }
 
   function renderSyncBadge() {
-    syncBadge.textContent = SYNC_LABEL[session.syncDemoState] || SYNC_LABEL.synced;
-    syncBadge.className = 'sync-badge sync-' + session.syncDemoState;
-    demoSyncSelect.value = session.syncDemoState;
+    syncBadge.textContent = SYNC_LABEL[syncState] || SYNC_LABEL.idle;
+    syncBadge.className = 'sync-badge sync-' + syncState;
+    syncBadge.onclick = (syncState === 'error' || syncState === 'offline') && pendingRetry
+      ? function () { pendingRetry(); }
+      : null;
+    syncBadge.style.cursor = syncBadge.onclick ? 'pointer' : 'default';
   }
 
   // 教師端看不到投影畫面，補一個小預覽，讓教師知道學生現在實際看到什麼。
@@ -294,22 +364,6 @@
     return ACTION_LABEL[action.type] || '剛完成一次操作';
   }
 
-  function afterAction() {
-    renderUndoBar();
-    if (session.syncDemoState === 'offline' || session.syncDemoState === 'error') {
-      render();
-      return;
-    }
-    session.syncDemoState = 'syncing';
-    Store.saveSession(session);
-    render();
-    setTimeout(function () {
-      session.syncDemoState = 'synced';
-      Store.saveSession(session);
-      render();
-    }, 400);
-  }
-
   // ---------- 密碼登入 ----------
 
   function openPasswordModal() {
@@ -324,7 +378,8 @@
   }
 
   function tryLogin() {
-    if (passwordInput.value === TEACHER_PIN) {
+    var pin = window.APP_CONFIG && window.APP_CONFIG.TEACHER_PIN;
+    if (passwordInput.value === pin) {
       mode = 'teacher';
       closePasswordModal();
       render();
@@ -356,20 +411,22 @@
   document.getElementById('startBtn').addEventListener('click', function () {
     var className = classSelect.value;
     var groupCount = parseInt(groupCountInput.value, 10) || 5;
-    session = Store.startSession(className, groupCount);
     correctingIndex = null;
-    render();
+    var actionId = Store.newActionId();
+    performAction(function () { return Store.startSession(className, groupCount, actionId); });
   });
 
   // 上方：永遠是「記錄新的一筆」，不限筆數，1 次點擊完成。
   document.querySelectorAll('.light-buttons .light-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      Store.addLight(session, btn.dataset.color);
-      afterAction();
+      var actionId = Store.newActionId();
+      performAction(function () {
+        return Store.addLight(session.sessionId, session.revision, btn.dataset.color, actionId);
+      });
     });
   });
 
-  // 下方：點某一筆既有紀錄進入更正模式。
+  // 下方：點某一筆既有紀錄進入更正模式（純本地畫面狀態，不呼叫後端）。
   document.getElementById('lightHistory').addEventListener('click', function (e) {
     var recordBtn = e.target.closest('.light-record');
     if (!recordBtn) return;
@@ -388,8 +445,10 @@
       render();
       return;
     }
-    Store.correctLight(session, index, newColor);
-    afterAction();
+    var actionId = Store.newActionId();
+    performAction(function () {
+      return Store.correctLight(session.sessionId, session.revision, index, newColor, actionId);
+    });
   });
 
   groupsSection.addEventListener('click', function (e) {
@@ -399,15 +458,20 @@
 
     var starBtn = e.target.closest('.star');
     if (starBtn) {
-      Store.setStars(session, groupId, parseInt(starBtn.dataset.value, 10));
-      afterAction();
+      var stars = parseInt(starBtn.dataset.value, 10);
+      var actionId = Store.newActionId();
+      performAction(function () {
+        return Store.setStars(session.sessionId, session.revision, groupId, stars, actionId);
+      });
       return;
     }
 
     var bulbBtn = e.target.closest('.bulb-badge');
     if (bulbBtn) {
-      Store.addBulb(session, groupId, 1);
-      afterAction();
+      var actionId2 = Store.newActionId();
+      performAction(function () {
+        return Store.addBulb(session.sessionId, session.revision, groupId, 1, actionId2);
+      });
     }
   });
 
@@ -415,8 +479,10 @@
     var seatInput = document.getElementById('achSeatInput');
     var seat = parseInt(seatInput.value, 10);
     if (!seat || seat < 1) return;
-    Store.addAchievement(session, seat, type);
-    afterAction();
+    var actionId = Store.newActionId();
+    performAction(function () {
+      return Store.addAchievement(session.sessionId, session.revision, seat, type, actionId);
+    });
   }
   document.getElementById('achQuestionBtn').addEventListener('click', function () {
     addAchievementFromInput('question');
@@ -430,44 +496,34 @@
     var ball = e.target.closest('.ball');
     if (!ball) return;
     var index = parseInt(ball.dataset.index, 10);
-    Store.removeAchievement(session, index);
-    afterAction();
+    var actionId = Store.newActionId();
+    performAction(function () {
+      return Store.removeAchievement(session.sessionId, session.revision, index, actionId);
+    });
   });
 
   document.getElementById('undoBtn').addEventListener('click', function () {
-    Store.undoLastAction(session);
-    undoBar.hidden = true;
-    render();
-  });
-
-  demoSyncSelect.addEventListener('change', function () {
-    session.syncDemoState = demoSyncSelect.value;
-    Store.saveSession(session);
-    render();
+    var actionId = Store.newActionId();
+    performAction(function () {
+      return Store.undo(session.sessionId, session.revision, actionId);
+    });
   });
 
   document.getElementById('endSessionBtn').addEventListener('click', function () {
     if (!confirm('確定要結束本節課嗎？結束後畫面會切回投影模式，顯示「本節課已結束」。')) return;
-    Store.endSession(session);
     mode = 'display';
     correctingIndex = null;
-    render();
+    var actionId = Store.newActionId();
+    performAction(function () {
+      return Store.endSession(session.sessionId, session.revision, actionId);
+    });
   });
 
-  // 另一個分頁（例如另一台裝置）改了資料時，這裡也要跟著更新。
-  window.addEventListener('storage', function (e) {
-    if (e.key === Store.STORAGE_KEY) {
-      session = Store.loadSession();
-      render();
-    }
-  });
-
+  // 分頁重新可見時（例如另一台已授權裝置切回來），重新取得最新狀態。
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) {
-      session = Store.loadSession();
-      render();
-    }
+    if (!document.hidden) refreshSession();
   });
 
   render();
+  initialLoad();
 })();

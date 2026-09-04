@@ -86,7 +86,7 @@
 
   <div id="startScreen" class="page" hidden>
     <h1 class="page-title">開始課堂</h1>
-    <p class="page-subtitle">原型示範：資料只存在這台瀏覽器裡，還沒有接真正的後端。</p>
+    <p class="page-subtitle">資料會即時存進 Google Sheet，跨裝置共用同一份。</p>
 
     <div class="card">
       <label class="field">
@@ -100,6 +100,7 @@
       </label>
 
       <button type="button" id="startBtn" class="btn btn-primary btn-block">開始本節課</button>
+      <p class="field-error" id="startError" hidden>開課失敗，請確認網路連線後再試一次。</p>
     </div>
 
     <button type="button" id="backToDisplayFromStartBtn" class="back-to-display-btn" style="margin-top:1rem;">↩ 返回投影畫面</button>
@@ -180,18 +181,6 @@
       <div class="ach-track" id="achTrack"></div>
     </section>
 
-    <div class="demo-tools">
-      <label>
-        <span>Demo：手動測試同步狀態</span>
-        <select id="demoSyncSelect">
-          <option value="synced">已同步</option>
-          <option value="syncing">同步中</option>
-          <option value="offline">離線，操作等待同步</option>
-          <option value="error">同步失敗，請重試</option>
-        </select>
-      </label>
-    </div>
-
     <div class="undo-bar" id="undoBar" hidden>
       <span id="undoText"></span>
       <button type="button" id="undoBtn" class="btn btn-small">復原</button>
@@ -204,6 +193,7 @@
 
 </div>
 
+<script src="js/config.js"></script>
 <script src="js/store.js"></script>
 <script src="js/app.js"></script>
 </body>
