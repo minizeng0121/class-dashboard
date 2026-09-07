@@ -69,7 +69,10 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var body = JSON.parse(e.postData.contents);
+    // e.postData.contents 在中文等多位元組字元上有已知的編碼問題（會把 UTF-8
+    // 位元組誤讀成 Latin-1），這裡用 escape/decodeURIComponent 轉回正確的 UTF-8。
+    var rawBody = decodeURIComponent(escape(e.postData.contents));
+    var body = JSON.parse(rawBody);
     if (body.pin !== TEACHER_PIN) {
       return jsonResponse_({ ok: false, error: 'invalid_pin' });
     }
