@@ -55,13 +55,19 @@
   });
 
   // ---------- 跟後端溝通：統一的「送出動作」流程 ----------
-  // 樂觀更新只做到「立刻顯示同步中」，實際資料一律以後端回傳的最新狀態為準
-  // （對應文件 15.3：後端不得靜默覆蓋較新資料，前端也不憑空推測結果）。
+  // applyOptimistic（選填）：對文件 6.5「讓教師點擊後立即看到結果」的實作——
+  // 傳入的話，會先在畫面上套用「假設會成功」的結果，背景才真的送出確認；
+  // 失敗（含斷線）時退回操作前的畫面，不留下猜錯的假資料。
+  // 後端回傳的資料永遠是最終依據（對應文件 15.3），成功時一律整包換成後端版本。
 
-  function performAction(promiseFactory) {
+  function performAction(promiseFactory, applyOptimistic) {
+    var previousSession = session;
+    if (applyOptimistic) {
+      session = applyOptimistic(cloneSession(session));
+    }
     syncState = 'syncing';
-    pendingRetry = function () { performAction(promiseFactory); };
-    renderSyncBadge();
+    pendingRetry = function () { performAction(promiseFactory, applyOptimistic); };
+    render();
 
     promiseFactory().then(function (res) {
       if (res.ok) {
@@ -77,17 +83,31 @@
         alert('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
       } else if (res.error === 'invalid_pin') {
         pendingRetry = null;
+        session = previousSession;
         syncState = 'error';
         render();
         alert('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
       } else {
+        session = previousSession;
         syncState = 'error';
         render();
       }
     }).catch(function () {
+      session = previousSession;
       syncState = navigator.onLine ? 'error' : 'offline';
       render();
     });
+  }
+
+  function cloneSession(s) {
+    return JSON.parse(JSON.stringify(s));
+  }
+
+  function findGroup(s, groupId) {
+    for (var i = 0; i < s.groups.length; i++) {
+      if (s.groups[i].id === groupId) return s.groups[i];
+    }
+    return null;
   }
 
   // 分頁重新可見時呼叫：失敗就靜默略過，畫面維持最後一次成功取得的資料（對應文件 16.2）。
@@ -420,8 +440,12 @@
   document.querySelectorAll('.light-buttons .light-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var actionId = Store.newActionId();
+      var color = btn.dataset.color;
       performAction(function () {
-        return Store.addLight(session.sessionId, session.revision, btn.dataset.color, actionId);
+        return Store.addLight(session.sessionId, session.revision, color, actionId);
+      }, function (s) {
+        s.lights.push({ color: color, at: new Date().toISOString() });
+        return s;
       });
     });
   });
@@ -448,6 +472,9 @@
     var actionId = Store.newActionId();
     performAction(function () {
       return Store.correctLight(session.sessionId, session.revision, index, newColor, actionId);
+    }, function (s) {
+      s.lights[index].color = newColor;
+      return s;
     });
   });
 
@@ -462,6 +489,10 @@
       var actionId = Store.newActionId();
       performAction(function () {
         return Store.setStars(session.sessionId, session.revision, groupId, stars, actionId);
+      }, function (s) {
+        var g = findGroup(s, groupId);
+        if (g) g.stars = stars;
+        return s;
       });
       return;
     }
@@ -471,6 +502,10 @@
       var actionId2 = Store.newActionId();
       performAction(function () {
         return Store.addBulb(session.sessionId, session.revision, groupId, 1, actionId2);
+      }, function (s) {
+        var g = findGroup(s, groupId);
+        if (g) g.bulbs = Math.max(0, g.bulbs + 1);
+        return s;
       });
     }
   });
@@ -482,6 +517,9 @@
     var actionId = Store.newActionId();
     performAction(function () {
       return Store.addAchievement(session.sessionId, session.revision, seat, type, actionId);
+    }, function (s) {
+      s.achievements.push({ seat: seat, type: type, at: new Date().toISOString() });
+      return s;
     });
   }
   document.getElementById('achQuestionBtn').addEventListener('click', function () {
@@ -499,6 +537,9 @@
     var actionId = Store.newActionId();
     performAction(function () {
       return Store.removeAchievement(session.sessionId, session.revision, index, actionId);
+    }, function (s) {
+      s.achievements.splice(index, 1);
+      return s;
     });
   });
 
