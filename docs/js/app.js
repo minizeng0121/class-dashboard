@@ -24,7 +24,13 @@
   var BALL_COLORS = ['#e15c4e', '#e2833c', '#d9a83c', '#3cae6c', '#2aa398', '#4a86c2', '#8268b8', '#db6f95'];
 
   var mode = 'display'; // 'display'（預設，學生看的）｜'teacher'（密碼通過後）
+  // session 是畫面實際顯示的資料 = confirmedSession（後端最後一次確認過的底稿）
+  // 疊上 pendingOps（還在排隊、尚未確認的樂觀猜測），由 recomputeSession() 算出。
+  // 不要直接對 session 賦值整包資料，除非同時也更新 confirmedSession，
+  // 否則下一次 recomputeSession() 會把手動塞進去的內容蓋掉。
   var session = null;
+  var confirmedSession = null;
+  var pendingOps = []; // { applyOptimistic }，依送出順序排列
   var loadError = null;
   var syncState = 'idle'; // 'idle'｜'syncing'｜'synced'｜'offline'｜'error'
   var pendingRetry = null;
@@ -58,9 +64,12 @@
 
   // ---------- 跟後端溝通：統一的「送出動作」流程 ----------
   // applyOptimistic（選填）：對文件 6.5「讓教師點擊後立即看到結果」的實作——
-  // 傳入的話，會先在畫面上套用「假設會成功」的結果，背景才真的送出確認；
-  // 失敗（含斷線）時退回操作前的畫面，不留下猜錯的假資料。
-  // 後端回傳的資料永遠是最終依據（對應文件 15.3），成功時一律整包換成後端版本。
+  // 傳入的話，會先在畫面上套用「假設會成功」的結果，背景才真的送出確認。
+  // 這個猜測會被記錄成一筆 pendingOps，在畫面上維持有效，直到「它自己」
+  // 確認或失敗為止；不會因為「其他更早送出、比它先確認回來」的操作
+  // 把畫面整包蓋掉——這是之前「連點下一個，上一個的結果就被復原」那個
+  // bug 的根本原因：以前是直接拿後端回應整包取代畫面，但後端回應只反映
+  // 它自己那一筆，會把還沒確認的下一筆效果一起蓋掉。
   //
   // actionQueue：真正送到後端的請求排隊、一次一筆，不是連按幾下就同時送出去。
   // 原因：後端處理一筆要 0.5~2 秒，畫面上的樂觀更新已經先讓使用者「感覺很快」，
@@ -70,43 +79,74 @@
 
   var actionQueue = Promise.resolve();
 
+  // 畫面永遠是「後端確認過的底稿」疊上「還沒確認的樂觀猜測」，不是直接等於
+  // 後端最新回應——這樣某一筆確認回來時，才不會把還沒確認的下一筆蓋掉。
+  function recomputeSession() {
+    var s = confirmedSession ? cloneSession(confirmedSession) : null;
+    if (s) {
+      pendingOps.forEach(function (op) { s = op.applyOptimistic(s); });
+    }
+    session = s;
+  }
+
+  function setConfirmedSession(data) {
+    confirmedSession = data;
+    recomputeSession();
+  }
+
   function performAction(promiseFactory, applyOptimistic) {
-    var previousSession = session;
-    if (applyOptimistic) {
-      session = applyOptimistic(cloneSession(session));
+    var op = applyOptimistic ? { applyOptimistic: applyOptimistic } : null;
+    if (op) {
+      pendingOps.push(op);
+      recomputeSession();
     }
     syncState = 'syncing';
     pendingRetry = function () { performAction(promiseFactory, applyOptimistic); };
     render();
 
+    function removeOp() {
+      if (!op) return;
+      var idx = pendingOps.indexOf(op);
+      if (idx !== -1) pendingOps.splice(idx, 1);
+    }
+    function settleSyncState(base) {
+      // 還有其他還沒確認的猜測排在後面，就繼續顯示「同步中」，不要提早顯示已同步/失敗。
+      syncState = pendingOps.length ? 'syncing' : base;
+    }
+
     actionQueue = actionQueue.then(function () {
       return promiseFactory().then(function (res) {
-      if (res.ok) {
-        pendingRetry = null;
-        session = res.data;
-        syncState = 'synced';
-        render();
-      } else if (res.error === 'revision_conflict') {
-        pendingRetry = null;
-        session = res.data;
-        syncState = 'synced';
-        render();
-        showNotice('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
-      } else if (res.error === 'invalid_pin') {
-        pendingRetry = null;
-        session = previousSession;
-        syncState = 'error';
-        render();
-        showNotice('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
-      } else {
-        session = previousSession;
-        syncState = 'error';
-        render();
-      }
+        if (res.ok) {
+          pendingRetry = null;
+          removeOp();
+          setConfirmedSession(res.data);
+          settleSyncState('synced');
+          render();
+        } else if (res.error === 'revision_conflict') {
+          pendingRetry = null;
+          removeOp();
+          setConfirmedSession(res.data);
+          settleSyncState('synced');
+          render();
+          showNotice('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
+        } else if (res.error === 'invalid_pin') {
+          pendingRetry = null;
+          removeOp();
+          recomputeSession();
+          settleSyncState('error');
+          render();
+          showNotice('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
+        } else {
+          removeOp();
+          recomputeSession();
+          settleSyncState('error');
+          render();
+        }
       });
     }).catch(function () {
-      session = previousSession;
-      syncState = navigator.onLine ? 'error' : 'offline';
+      removeOp();
+      recomputeSession();
+      settleSyncState(navigator.onLine ? 'error' : 'offline');
       render();
     });
   }
@@ -132,9 +172,10 @@
   }
 
   // 分頁重新可見時呼叫：失敗就靜默略過，畫面維持最後一次成功取得的資料（對應文件 16.2）。
+  // 即使這時候還有排隊中的樂觀猜測（pendingOps），也只是換掉底稿，猜測繼續疊在上面。
   function refreshSession() {
     Store.getCurrentSession().then(function (data) {
-      session = data;
+      setConfirmedSession(data);
       loadError = null;
       render();
     }).catch(function () {});
@@ -143,7 +184,7 @@
   // 頁面第一次載入呼叫：失敗要讓教師看得出「連不上後端」，不能悄悄停在等待畫面。
   function initialLoad() {
     Store.getCurrentSession().then(function (data) {
-      session = data;
+      setConfirmedSession(data);
       loadError = null;
       render();
     }).catch(function (err) {
