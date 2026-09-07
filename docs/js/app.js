@@ -507,6 +507,7 @@
         return Store.addLight(session.sessionId, session.revision, color, actionId);
       }, function (s) {
         s.lights.push({ color: color, at: new Date().toISOString() });
+        s.lastAction = { type: 'light-add', index: s.lights.length - 1 };
         return s;
       });
     });
@@ -535,7 +536,9 @@
     performAction(function () {
       return Store.correctLight(session.sessionId, session.revision, index, newColor, actionId);
     }, function (s) {
+      var prevColor = s.lights[index].color;
       s.lights[index].color = newColor;
+      s.lastAction = { type: 'light-correct', index: index, prevColor: prevColor };
       return s;
     });
   });
@@ -553,7 +556,9 @@
         return Store.setStars(session.sessionId, session.revision, groupId, stars, actionId);
       }, function (s) {
         var g = findGroup(s, groupId);
+        var prevStars = g ? g.stars : null;
         if (g) g.stars = stars;
+        s.lastAction = { type: 'stars', groupId: groupId, prevStars: prevStars };
         return s;
       });
       return;
@@ -566,7 +571,9 @@
         return Store.addBulb(session.sessionId, session.revision, groupId, 1, actionId2);
       }, function (s) {
         var g = findGroup(s, groupId);
+        var prevBulbs = g ? g.bulbs : 0;
         if (g) g.bulbs = Math.max(0, g.bulbs + 1);
+        s.lastAction = { type: 'bulb', groupId: groupId, prevBulbs: prevBulbs };
         return s;
       });
     }
@@ -581,6 +588,7 @@
       return Store.addAchievement(session.sessionId, session.revision, seat, type, actionId);
     }, function (s) {
       s.achievements.push({ seat: seat, type: type, at: new Date().toISOString() });
+      s.lastAction = { type: 'achievement-add', index: s.achievements.length - 1 };
       return s;
     });
   }
@@ -600,15 +608,39 @@
     performAction(function () {
       return Store.removeAchievement(session.sessionId, session.revision, index, actionId);
     }, function (s) {
+      var entry = s.achievements[index];
       s.achievements.splice(index, 1);
+      s.lastAction = { type: 'achievement-remove', index: index, entry: entry };
       return s;
     });
   });
 
+  // 復原：跟後端 handleUndo_ 用同一套還原邏輯，鏡射一份在前端，
+  // 這樣點下去能立刻看到復原結果，不用等後端來回確認。
   document.getElementById('undoBtn').addEventListener('click', function () {
     var actionId = Store.newActionId();
     performAction(function () {
       return Store.undo(session.sessionId, session.revision, actionId);
+    }, function (s) {
+      var action = s.lastAction;
+      if (!action) return s;
+      if (action.type === 'light-add') {
+        s.lights.splice(action.index, 1);
+      } else if (action.type === 'light-correct') {
+        s.lights[action.index].color = action.prevColor;
+      } else if (action.type === 'achievement-add') {
+        s.achievements.splice(action.index, 1);
+      } else if (action.type === 'achievement-remove') {
+        s.achievements.splice(action.index, 0, action.entry);
+      } else if (action.type === 'stars') {
+        var g1 = findGroup(s, action.groupId);
+        if (g1) g1.stars = action.prevStars;
+      } else if (action.type === 'bulb') {
+        var g2 = findGroup(s, action.groupId);
+        if (g2) g2.bulbs = action.prevBulbs;
+      }
+      s.lastAction = null;
+      return s;
     });
   });
 
