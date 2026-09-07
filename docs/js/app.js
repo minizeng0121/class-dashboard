@@ -59,6 +59,14 @@
   // 傳入的話，會先在畫面上套用「假設會成功」的結果，背景才真的送出確認；
   // 失敗（含斷線）時退回操作前的畫面，不留下猜錯的假資料。
   // 後端回傳的資料永遠是最終依據（對應文件 15.3），成功時一律整包換成後端版本。
+  //
+  // actionQueue：真正送到後端的請求排隊、一次一筆，不是連按幾下就同時送出去。
+  // 原因：後端處理一筆要 0.5~2 秒，畫面上的樂觀更新已經先讓使用者「感覺很快」，
+  // 如果請求不排隊，連續點擊時後面的請求會帶著還沒更新到的舊 revision 送出，
+  // 後端會誤判成「被別的裝置改過」而回報衝突——其實只是自己跟自己搶而已。
+  // 排隊之後，每一筆送出前都會先等前一筆確認完、拿到最新 revision 才送，不會誤判。
+
+  var actionQueue = Promise.resolve();
 
   function performAction(promiseFactory, applyOptimistic) {
     var previousSession = session;
@@ -69,7 +77,8 @@
     pendingRetry = function () { performAction(promiseFactory, applyOptimistic); };
     render();
 
-    promiseFactory().then(function (res) {
+    actionQueue = actionQueue.then(function () {
+      return promiseFactory().then(function (res) {
       if (res.ok) {
         pendingRetry = null;
         session = res.data;
@@ -92,6 +101,7 @@
         syncState = 'error';
         render();
       }
+      });
     }).catch(function () {
       session = previousSession;
       syncState = navigator.onLine ? 'error' : 'offline';
