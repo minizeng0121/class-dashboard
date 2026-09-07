@@ -118,6 +118,7 @@ function getCurrentSession_() {
 
 function handleStartSession_(body) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSIONS_SHEET);
+  var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
   var now = new Date().toISOString();
   var sessionId = Utilities.getUuid();
 
@@ -137,9 +138,10 @@ function handleStartSession_(body) {
   };
   appendRow_(sheet, SESSIONS_HEADERS, row);
 
-  var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
-  (body.groups || []).forEach(function (g) {
-    appendRow_(groupsSheet, SESSION_GROUPS_HEADERS, {
+  // 所有小組一次寫入（一次 setValues 呼叫），不要每組各呼叫一次試算表 API——
+  // 那樣 5 組就要 5 次網路來回，是開課速度慢的主因之一。
+  var groupRows = (body.groups || []).map(function (g) {
+    return {
       session_group_id: Utilities.getUuid(),
       session_id: sessionId,
       group_id: g.id,
@@ -148,10 +150,15 @@ function handleStartSession_(body) {
       current_stars: 3,
       bulb_count: 0,
       updated_at: now
-    });
+    };
   });
+  appendRows_(groupsSheet, SESSION_GROUPS_HEADERS, groupRows);
 
-  return { ok: true, data: sessionRowToObject_(findRowByValue_(sheet, SESSIONS_HEADERS, 'session_id', sessionId)) };
+  // 剛寫入的內容已經在記憶體裡，不用再讀一次試算表確認。
+  var groups = groupRows.map(function (g) {
+    return { id: g.group_id, name: g.group_name_snapshot, stars: g.current_stars, bulbs: g.bulb_count };
+  });
+  return { ok: true, data: sessionRowToObject_({ row: row }, groups) };
 }
 
 function handleAddLight_(body) {
@@ -296,8 +303,14 @@ function withSessionGroup_(body, mutate) {
     return { ok: false, error: 'revision_conflict', data: sessionRowToObject_(sessionFound) };
   }
 
+  // 一次讀出這堂課全部小組列：同時用來找目標小組、也用來組回傳的 groups 清單，
+  // 不用像原本那樣「找目標組讀一次、組回傳結果又整份重讀一次」。
   var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
-  var groupFound = findRowByValue_(groupsSheet, SESSION_GROUPS_HEADERS, 'group_id', body.groupId, 'session_id', body.sessionId);
+  var groupRows = findRowsByValue_(groupsSheet, SESSION_GROUPS_HEADERS, 'session_id', body.sessionId);
+  var groupFound = null;
+  for (var i = 0; i < groupRows.length; i++) {
+    if (groupRows[i].row.group_id === body.groupId) { groupFound = groupRows[i]; break; }
+  }
   if (!groupFound) return { ok: false, error: 'group_not_found' };
 
   var result = mutate(groupFound.row);
@@ -314,7 +327,10 @@ function withSessionGroup_(body, mutate) {
   sessionFound.row.recent_action_ids_json = JSON.stringify(recentIds);
   writeRowBack_(sessionSheet, SESSIONS_HEADERS, sessionFound.rowIndex, sessionFound.row);
 
-  return { ok: true, data: sessionRowToObject_(sessionFound) };
+  var groups = groupRows.map(function (g) {
+    return { id: g.row.group_id, name: g.row.group_name_snapshot, stars: g.row.current_stars, bulbs: g.row.bulb_count };
+  });
+  return { ok: true, data: sessionRowToObject_(sessionFound, groups) };
 }
 
 function setGroupField_(sessionId, groupId, field, value) {
@@ -351,9 +367,31 @@ function findRowByValue_(sheet, headers, key, value, key2, value2) {
   return null;
 }
 
+// 回傳所有符合條件的列（例如同一堂課底下的所有小組），一次讀取重複使用，
+// 避免呼叫端「找一筆」跟「列全部」分開各讀一次試算表。
+function findRowsByValue_(sheet, headers, key, value) {
+  var values = sheet.getDataRange().getValues();
+  var results = [];
+  for (var i = 1; i < values.length; i++) {
+    var row = rowArrayToObject_(headers, values[i]);
+    if (row[key] === value) results.push({ row: row, rowIndex: i + 1 });
+  }
+  return results;
+}
+
 function appendRow_(sheet, headers, rowObj) {
   var arr = headers.map(function (h) { return rowObj[h]; });
   sheet.appendRow(arr);
+}
+
+// 一次寫入多列（例如開課時建立好幾組），比逐筆呼叫 appendRow_ 少很多次網路來回。
+function appendRows_(sheet, headers, rowObjs) {
+  if (!rowObjs.length) return;
+  var arr = rowObjs.map(function (rowObj) {
+    return headers.map(function (h) { return rowObj[h]; });
+  });
+  var startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, 1, arr.length, headers.length).setValues(arr);
 }
 
 function writeRowBack_(sheet, headers, rowIndex, rowObj) {
@@ -369,15 +407,20 @@ function rowArrayToObject_(headers, arr) {
 
 // ---------- 組成回給前端的 session JSON（跟前端 store.js 原本的資料形狀對齊） ----------
 
-function sessionRowToObject_(found) {
+// precomputedGroups：呼叫端如果剛好已經有這堂課的小組資料（例如才剛讀過或寫過），
+// 直接傳進來用，省一次試算表讀取；沒有傳的話才自己去讀 SessionGroups 分頁。
+function sessionRowToObject_(found, precomputedGroups) {
   var row = found.row;
-  var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
-  var values = groupsSheet.getDataRange().getValues();
-  var groups = [];
-  for (var i = 1; i < values.length; i++) {
-    var g = rowArrayToObject_(SESSION_GROUPS_HEADERS, values[i]);
-    if (g.session_id === row.session_id) {
-      groups.push({ id: g.group_id, name: g.group_name_snapshot, stars: g.current_stars, bulbs: g.bulb_count });
+  var groups = precomputedGroups;
+  if (!groups) {
+    var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
+    var values = groupsSheet.getDataRange().getValues();
+    groups = [];
+    for (var i = 1; i < values.length; i++) {
+      var g = rowArrayToObject_(SESSION_GROUPS_HEADERS, values[i]);
+      if (g.session_id === row.session_id) {
+        groups.push({ id: g.group_id, name: g.group_name_snapshot, stars: g.current_stars, bulbs: g.bulb_count });
+      }
     }
   }
 
