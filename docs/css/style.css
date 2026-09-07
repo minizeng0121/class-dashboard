@@ -393,6 +393,16 @@ h1, h2, h3 { margin: 0; }
 }
 .undo-bar button { background: #fff; color: var(--ink); border-radius: 999px; }
 
+.sync-notice {
+  margin: 0 0 1rem;
+  padding: 0.6em 1em;
+  border-radius: 0.6em;
+  background: #fff4e5;
+  color: #7a4a00;
+  font-size: 0.9rem;
+  box-shadow: var(--shadow);
+}
+
 .console-footer {
   position: fixed;
   bottom: 0; left: 0; right: 0;

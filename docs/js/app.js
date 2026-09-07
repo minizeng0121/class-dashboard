@@ -42,6 +42,8 @@
   var undoBar = document.getElementById('undoBar');
   var undoText = document.getElementById('undoText');
   var syncBadge = document.getElementById('syncBadge');
+  var syncNotice = document.getElementById('syncNotice');
+  var syncNoticeTimer = null;
 
   var passwordModal = document.getElementById('passwordModal');
   var passwordInput = document.getElementById('passwordInput');
@@ -89,13 +91,13 @@
         session = res.data;
         syncState = 'synced';
         render();
-        alert('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
+        showNotice('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
       } else if (res.error === 'invalid_pin') {
         pendingRetry = null;
         session = previousSession;
         syncState = 'error';
         render();
-        alert('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
+        showNotice('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
       } else {
         session = previousSession;
         syncState = 'error';
@@ -111,6 +113,15 @@
 
   function cloneSession(s) {
     return JSON.parse(JSON.stringify(s));
+  }
+
+  // 用畫面上的小提示取代 alert()：alert() 會整個網頁完全卡住等使用者關掉它，
+  // 上課中萬一沒注意到跳出來的視窗，會誤以為整頁當機、怎麼點都沒反應。
+  function showNotice(text) {
+    syncNotice.textContent = text;
+    syncNotice.hidden = false;
+    clearTimeout(syncNoticeTimer);
+    syncNoticeTimer = setTimeout(function () { syncNotice.hidden = true; }, 6000);
   }
 
   function findGroup(s, groupId) {
