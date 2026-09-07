@@ -4,6 +4,6 @@
  * TEACHER_PIN 要跟 backend/Code.gs 裡的 TEACHER_PIN 保持一致。
  */
 window.APP_CONFIG = {
-  API_URL: 'PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwAR30tXhIJ9GVA7oPyVrfcIdNaTUMaBTTbaiuQJ--U4pRVc5adHTGggpwwD--zYmr6Gw/exec',
   TEACHER_PIN: '1234'
 };
