@@ -69,7 +69,7 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var body = JSON.parse(decodeUtf8Fallback_(e.postData.contents));
+    var body = JSON.parse(readPostBody_(e));
     if (body.pin !== TEACHER_PIN) {
       return jsonResponse_({ ok: false, error: 'invalid_pin' });
     }
@@ -102,7 +102,25 @@ function jsonResponse_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// e.postData.contents 在中文等多位元組字元上有已知的編碼問題：Apps Script
+// 讀取 POST 內容。優先用 getDataAsString()（Apps Script 官方建議的讀法，
+// 比直接讀 .contents 屬性更穩定）；如果這個方式本身出狀況，退而用 .contents，
+// 兩種都失敗才真的放棄，回傳空物件的 JSON 字串，讓上層的 JSON.parse 有東西
+// 可以解析，不會讓整個請求連 catch 都來不及進就死掉。
+function readPostBody_(e) {
+  var raw = null;
+  try {
+    raw = e.postData.getDataAsString();
+  } catch (err1) {
+    try {
+      raw = e.postData.contents;
+    } catch (err2) {
+      return '{}';
+    }
+  }
+  return decodeUtf8Fallback_(raw);
+}
+
+// e.postData 在中文等多位元組字元上有已知的編碼問題：Apps Script
 // 有時候會把 UTF-8 位元組誤讀成 Latin-1，把每個位元組當成一個字元。
 // escape()+decodeURIComponent() 可以修好「被誤讀」的字串，但如果字串其實
 // 已經是正確的（本來就有正常的中文字），同一招反而會丟出 URIError（因為
