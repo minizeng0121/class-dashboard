@@ -313,6 +313,7 @@ function withSession_(body, mutate) {
   if (ctx && ctx.noop) {
     // mutate 判斷這次操作實際上什麼都沒改（例如沒有上一步可以復原），
     // 不消耗 revision、不佔用 action_id 名額，避免其他裝置被誤判成版本衝突。
+    // noop 一定沒有動到 SessionGroups，precomputed 的 groups 還是準的。
     return { ok: true, data: sessionRowToObject_(found, groups) };
   }
   ctx.row.revision = ctx.row.revision + 1;
@@ -322,7 +323,12 @@ function withSession_(body, mutate) {
   ctx.row.recent_action_ids_json = JSON.stringify(recentIds);
 
   writeRowBack_(sheet, SESSIONS_HEADERS, found.rowIndex, ctx.row);
-  return { ok: true, data: sessionRowToObject_({ row: ctx.row, rowIndex: found.rowIndex }, groups) };
+  // 這裡故意不重用上面 precompute 的 groups：handleUndo_ 復原星等/💡 時
+  // 會透過 setGroupField_ 直接寫入 SessionGroups，發生在 mutate() 執行期間，
+  // 比 groups 的讀取時間點還晚——如果沿用舊的 groups，回傳給前端的小組資料
+  // 會是「復原前」的舊值，前端顯示會跟試算表裡真正存的資料對不起來。
+  // 這幾個 handler 大多數情況不動小組資料，多這次讀取換取一定正確，值得。
+  return { ok: true, data: sessionRowToObject_({ row: ctx.row, rowIndex: found.rowIndex }) };
 }
 
 function withSessionGroup_(body, mutate) {
@@ -463,14 +469,10 @@ function sessionRowToObject_(found, precomputedGroups) {
   var groups = precomputedGroups;
   if (!groups) {
     var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
-    var values = groupsSheet.getDataRange().getValues();
-    groups = [];
-    for (var i = 1; i < values.length; i++) {
-      var g = rowArrayToObject_(SESSION_GROUPS_HEADERS, values[i]);
-      if (g.session_id === row.session_id) {
-        groups.push({ id: g.group_id, name: g.group_name_snapshot, stars: g.current_stars, bulbs: g.bulb_count });
-      }
-    }
+    var groupRows = findRowsByValue_(groupsSheet, SESSION_GROUPS_HEADERS, 'session_id', row.session_id);
+    groups = groupRows.map(function (g) {
+      return { id: g.row.group_id, name: g.row.group_name_snapshot, stars: g.row.current_stars, bulbs: g.row.bulb_count };
+    });
   }
 
   return {
