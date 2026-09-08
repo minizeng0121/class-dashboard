@@ -1,7 +1,7 @@
 /*
  * Store：跟 Apps Script 後端溝通的薄封裝層。
  * 資料實際存在 Google Sheet，這裡只負責打 API、回傳 Promise。
- * teacher.js／display.js 已經不再使用（現行版面是 index.html + app.js）。
+ * 被 docs/index.html（display.js）跟 docs/teacher.html（teacher.js）共用。
  */
 (function (global) {
   var GROUP_NAME_POOL = [

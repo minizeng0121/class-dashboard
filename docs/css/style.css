@@ -65,28 +65,6 @@ h1, h2, h3 { margin: 0; }
   align-items: center;
 }
 
-/* ---------- 密碼登入視窗 ---------- */
-
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(22, 50, 61, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  z-index: 50;
-}
-.modal-card {
-  background: var(--card-bg);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  padding: 1.6rem;
-  width: 100%;
-  max-width: 340px;
-}
-.modal-actions { display: flex; gap: 0.6rem; margin-top: 1.2rem; }
-.modal-actions .btn { flex: 1; }
 .field-error { color: var(--red); font-size: 0.85rem; margin: 0.6rem 0 0; }
 
 .page {
@@ -242,8 +220,6 @@ h1, h2, h3 { margin: 0; }
   background: #fff;
   color: var(--ink);
 }
-
-.ended-inner { text-align: center; }
 
 /* ---------- 教師控制台：頂部 ---------- */
 
@@ -405,21 +381,6 @@ h1, h2, h3 { margin: 0; }
   border-top: 1px solid var(--border);
 }
 .console-footer .btn { flex: 1; }
-
-.demo-tools {
-  margin-top: 1.2rem;
-  padding: 0.8rem 1rem;
-  border: 1.5px dashed var(--border);
-  border-radius: var(--radius-md);
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-.demo-tools select {
-  margin-left: 0.5rem;
-  min-height: 36px;
-  border-radius: var(--radius-sm);
-  border: 1.5px solid var(--border);
-}
 
 /* ---------- 學生前台 ---------- */
 

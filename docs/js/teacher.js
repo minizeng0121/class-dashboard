@@ -38,9 +38,8 @@
   var session = null;
   var confirmedSession = null;
   var pendingOps = []; // { applyOptimistic }，依送出順序排列
-  var loadError = null;
   var syncState = 'idle'; // 'idle'｜'syncing'｜'synced'｜'offline'｜'error'
-  var pendingRetry = null;
+  var pendingRetries = []; // 失敗、還沒重試成功的動作，可能同時有好幾筆
   var undoTimer = null;
   var correctingIndex = null; // null＝沒有在更正；否則是「本節燈號紀錄」清單裡正在更正的那筆索引
 
@@ -95,8 +94,19 @@
       recomputeSession();
     }
     syncState = 'syncing';
-    pendingRetry = function () { performAction(promiseFactory, applyOptimistic); };
     render();
+
+    // 這筆動作自己的重試記錄——只有真的失敗才會被加進 pendingRetries，
+    // 陣列（不是單一變數）讓好幾筆各自失敗的動作可以一起被重試，
+    // 不會只留得住「最後一筆」、更早失敗的那些悄悄消失、只能手動重做。
+    var retryEntry = { run: function () { performAction(promiseFactory, applyOptimistic); } };
+    function addRetry() {
+      if (pendingRetries.indexOf(retryEntry) === -1) pendingRetries.push(retryEntry);
+    }
+    function clearRetry() {
+      var idx = pendingRetries.indexOf(retryEntry);
+      if (idx !== -1) pendingRetries.splice(idx, 1);
+    }
 
     function removeOp() {
       if (!op) return;
@@ -104,19 +114,22 @@
       if (idx !== -1) pendingOps.splice(idx, 1);
     }
     function settleSyncState(base) {
-      syncState = pendingOps.length ? 'syncing' : base;
+      if (pendingOps.length) { syncState = 'syncing'; return; }
+      // 這筆自己成功了，但如果還有其他更早失敗、還沒重試的動作，
+      // 徽章要繼續顯示失敗狀態，不能假裝全部都同步好了。
+      syncState = pendingRetries.length ? 'error' : base;
     }
 
     actionQueue = actionQueue.then(function () {
       return promiseFactory().then(function (res) {
         if (res.ok) {
-          pendingRetry = null;
+          clearRetry();
           removeOp();
           setConfirmedSession(res.data);
           settleSyncState('synced');
           render();
         } else if (res.error === 'revision_conflict') {
-          pendingRetry = null;
+          clearRetry();
           removeOp();
           setConfirmedSession(res.data);
           settleSyncState('synced');
@@ -125,13 +138,14 @@
         } else if (res.error === 'invalid_pin') {
           // 這一頁不用手動登入，密碼是 teacher.js 開頭自動帶的；
           // 真的出現這個錯誤，代表這裡的 TEACHER_PIN 跟 Code.gs 裡的不一致。
-          pendingRetry = null;
+          clearRetry();
           removeOp();
           recomputeSession();
           settleSyncState('error');
           render();
           showNotice('教師密碼設定不一致，請檢查 teacher.js 與 backend/Code.gs 的 TEACHER_PIN 是否相同。');
         } else {
+          addRetry();
           removeOp();
           recomputeSession();
           settleSyncState('error');
@@ -139,11 +153,18 @@
         }
       });
     }).catch(function () {
+      addRetry();
       removeOp();
       recomputeSession();
       settleSyncState(navigator.onLine ? 'error' : 'offline');
       render();
     });
+  }
+
+  function retryAllPending() {
+    var toRetry = pendingRetries.slice();
+    pendingRetries = [];
+    toRetry.forEach(function (entry) { entry.run(); });
   }
 
   function cloneSession(s) {
@@ -169,19 +190,18 @@
   function refreshSession() {
     Store.getCurrentSession().then(function (data) {
       setConfirmedSession(data);
-      loadError = null;
       render();
     }).catch(function () {});
   }
 
-  // 頁面第一次載入呼叫：失敗要讓教師看得出「連不上後端」。
+  // 頁面第一次載入呼叫：失敗要讓教師看得出「連不上後端」，所以這裡要真的
+  // 設定 syncState，不能只靜默略過——render() 裡的 startError 就是看這個。
   function initialLoad() {
     Store.getCurrentSession().then(function (data) {
       setConfirmedSession(data);
-      loadError = null;
       render();
-    }).catch(function (err) {
-      loadError = err;
+    }).catch(function () {
+      syncState = 'error';
       render();
     });
   }
@@ -200,8 +220,7 @@
     }
 
     document.getElementById('className').textContent = session.className;
-    document.getElementById('startedAtText').textContent =
-      '開始時間：' + new Date(session.startedAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+    document.getElementById('startedAtText').textContent = '開始時間：' + formatTime(session.startedAt);
 
     renderSyncBadge();
     renderTeacherPreview();
@@ -214,8 +233,8 @@
   function renderSyncBadge() {
     syncBadge.textContent = SYNC_LABEL[syncState] || SYNC_LABEL.idle;
     syncBadge.className = 'sync-badge sync-' + syncState;
-    syncBadge.onclick = (syncState === 'error' || syncState === 'offline') && pendingRetry
-      ? function () { pendingRetry(); }
+    syncBadge.onclick = (syncState === 'error' || syncState === 'offline') && pendingRetries.length
+      ? retryAllPending
       : null;
     syncBadge.style.cursor = syncBadge.onclick ? 'pointer' : 'default';
   }
@@ -250,11 +269,14 @@
 
   function renderCorrectPicker() {
     var wrap = document.getElementById('correctPicker');
-    if (correctingIndex === null) {
+    var entry = correctingIndex === null ? null : session.lights[correctingIndex];
+    if (!entry) {
+      // 正在更正的那筆燈號可能被復原掉了（例如剛新增就馬上按復原），
+      // 這裡防呆一下，不然 entry.at 會直接噴錯，讓整個畫面卡住。
+      correctingIndex = null;
       wrap.hidden = true;
       return;
     }
-    var entry = session.lights[correctingIndex];
     wrap.hidden = false;
     document.getElementById('correctHint').textContent =
       '正在更正 ' + formatTime(entry.at) + ' 的燈號，目前是' + LIGHT_CHIP_LABEL[entry.color] +
@@ -450,6 +472,8 @@
   // 復原：跟後端 handleUndo_ 用同一套還原邏輯，鏡射一份在前端，
   // 這樣點下去能立刻看到復原結果，不用等後端來回確認。
   document.getElementById('undoBtn').addEventListener('click', function () {
+    // 復原可能會讓正在更正模式裡指著的那筆燈號消失或錯位，直接離開更正模式。
+    correctingIndex = null;
     var actionId = Store.newActionId();
     performAction(function () {
       return Store.undo(session.sessionId, session.revision, actionId);
@@ -489,6 +513,12 @@
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) refreshSession();
   });
+
+  // 對應文件 15.5：MVP 允許教師在另一台已授權裝置重新開啟同一堂課。
+  // 不加這個的話，A 裝置操作的結果，B 裝置要等使用者手動切頁才會看到，
+  // 中間會一直顯示過期資料。間隔比投影頁（4 秒）長，因為這裡主要是
+  // 補「別的裝置改了什麼」，自己操作的樂觀更新本來就已經秒回。
+  setInterval(function () { if (!document.hidden) refreshSession(); }, 8000);
 
   render();
   initialLoad();

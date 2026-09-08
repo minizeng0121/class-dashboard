@@ -119,12 +119,21 @@
     });
   }
 
-  // 分頁重新可見時額外刷新一次，不用等到下一次輪詢。
+  // 分頁重新可見時額外刷新一次、順便重新起算輪詢間隔，避免「剛好切回來」跟
+  // 「輪詢剛好也到時間」兩個幾乎同時觸發，短時間內打兩次一樣的請求。
+  var pollTimer = null;
+  function restartPolling() {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
+  }
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) refresh();
+    if (!document.hidden) {
+      refresh();
+      restartPolling();
+    }
   });
 
-  setInterval(refresh, POLL_INTERVAL_MS);
+  restartPolling();
 
   render();
   initialLoad();

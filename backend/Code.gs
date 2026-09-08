@@ -13,8 +13,9 @@
 
 // ---------- 設定 ----------
 
-// 教師 PIN：只存在這裡（不進版控），前端不再內建正確答案，登入時才問後端對不對。
-// 之後若換成正式 Google 帳號登入（文件 19.1），這個檢查會被取代，不是本次範圍。
+// 教師 PIN：docs/js/teacher.js 也寫死同一組（Store.setPin 自動帶上，教師不用手動輸入）。
+// 這不是真正的存取控制，只是零成本擋掉學生手滑誤觸教師控制台，兩邊都是公開檔案、
+// 都會進 git——真正的保護要等之後接 Google 帳號登入（文件 19.1），這次沒有做到那一步。
 var TEACHER_PIN = '5787';
 
 var SESSIONS_SHEET = 'Sessions';
@@ -67,9 +68,14 @@ function doGet(e) {
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  var lockAcquired = false;
   try {
-    var body = JSON.parse(readPostBody_(e));
+    lock.waitLock(10000);
+    lockAcquired = true;
+
+    // 明確指定用 UTF-8 解碼，不用「猜猜看有沒有被誤讀」那種修法——之前用
+    // escape()+decodeURIComponent() 去猜，猜錯過，直接指定字元集才是正解。
+    var body = JSON.parse(e.postData.getDataAsString('UTF-8'));
     if (body.pin !== TEACHER_PIN) {
       return jsonResponse_({ ok: false, error: 'invalid_pin' });
     }
@@ -91,9 +97,11 @@ function doPost(e) {
 
     return jsonResponse_(handler(body));
   } catch (err) {
+    // lock.waitLock 逾時也會被這裡接住，一律回傳固定格式的 JSON，
+    // 前端才不會收到 Apps Script 預設的錯誤頁面而解析失敗。
     return jsonResponse_({ ok: false, error: 'server_error', message: String(err) });
   } finally {
-    lock.releaseLock();
+    if (lockAcquired) lock.releaseLock();
   }
 }
 
@@ -102,43 +110,10 @@ function jsonResponse_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// 讀取 POST 內容。優先用 getDataAsString()（Apps Script 官方建議的讀法，
-// 比直接讀 .contents 屬性更穩定）；如果這個方式本身出狀況，退而用 .contents，
-// 兩種都失敗才真的放棄，回傳空物件的 JSON 字串，讓上層的 JSON.parse 有東西
-// 可以解析，不會讓整個請求連 catch 都來不及進就死掉。
-function readPostBody_(e) {
-  var raw = null;
-  try {
-    raw = e.postData.getDataAsString();
-  } catch (err1) {
-    try {
-      raw = e.postData.contents;
-    } catch (err2) {
-      return '{}';
-    }
-  }
-  return decodeUtf8Fallback_(raw);
-}
-
-// e.postData 在中文等多位元組字元上有已知的編碼問題：Apps Script
-// 有時候會把 UTF-8 位元組誤讀成 Latin-1，把每個位元組當成一個字元。
-// escape()+decodeURIComponent() 可以修好「被誤讀」的字串，但如果字串其實
-// 已經是正確的（本來就有正常的中文字），同一招反而會丟出 URIError（因為
-// escape() 對超過一個位元組的字元會編成 decodeURIComponent 看不懂的 %u 格式）。
-// 用 try/catch 讓它自己判斷：try 成功代表「原本被誤讀，已經修好」；
-// try 失敗（丟例外）就代表「原本就是對的」，直接用原始內容，不強改。
-function decodeUtf8Fallback_(raw) {
-  try {
-    return decodeURIComponent(escape(raw));
-  } catch (e) {
-    return raw;
-  }
-}
-
 // ---------- 讀取 ----------
 
 function getCurrentSession_() {
-  var row = findActiveSessionRow_();
+  var row = findLatestSessionRow_();
   if (!row) return null;
   return sessionRowToObject_(row);
 }
@@ -158,6 +133,16 @@ function handleStartSession_(body) {
   var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
   var now = new Date().toISOString();
   var sessionId = Utilities.getUuid();
+
+  // 對應文件廿一「同一班只能有一堂進行中課堂」：如果上一堂課忘記按「結束課堂」
+  // 就直接開新的一堂，先把舊的那堂自動標記結束，避免同時存在兩堂 active 課堂、
+  // 造成歷史資料/學期統計對不起來。
+  var staleActive = findActiveSessionRow_();
+  if (staleActive) {
+    staleActive.row.status = 'completed';
+    staleActive.row.ended_at = now;
+    writeRowBack_(sheet, SESSIONS_HEADERS, staleActive.rowIndex, staleActive.row);
+  }
 
   var row = {
     session_id: sessionId,
@@ -263,7 +248,7 @@ function handleRemoveAchievement_(body) {
 function handleUndo_(body) {
   return withSession_(body, function (ctx) {
     var action = ctx.row.last_action_json ? JSON.parse(ctx.row.last_action_json) : null;
-    if (!action) return ctx;
+    if (!action) return { noop: true };
 
     if (action.type === 'light-add') {
       var lights = JSON.parse(ctx.row.lights_json || '[]');
@@ -307,16 +292,29 @@ function withSession_(body, mutate) {
   var found = findRowByValue_(sheet, SESSIONS_HEADERS, 'session_id', body.sessionId);
   if (!found) return { ok: false, error: 'session_not_found' };
 
+  // 順便把這堂課的小組資料一起讀出來，待會組回傳結果直接用，不用再多讀一次
+  // SessionGroups（這幾個 handler 本身不會動到小組資料，只是回應要附上）。
+  var groupsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSION_GROUPS_SHEET);
+  var groupRows = findRowsByValue_(groupsSheet, SESSION_GROUPS_HEADERS, 'session_id', body.sessionId);
+  var groups = groupRows.map(function (g) {
+    return { id: g.row.group_id, name: g.row.group_name_snapshot, stars: g.row.current_stars, bulbs: g.row.bulb_count };
+  });
+
   var recentIds = JSON.parse(found.row.recent_action_ids_json || '[]');
   if (recentIds.indexOf(body.actionId) !== -1) {
     // 同一個 action_id 已經套用過，直接回傳目前狀態，不重複套用。
-    return { ok: true, data: sessionRowToObject_(found) };
+    return { ok: true, data: sessionRowToObject_(found, groups) };
   }
   if (typeof body.revision === 'number' && body.revision !== found.row.revision) {
-    return { ok: false, error: 'revision_conflict', data: sessionRowToObject_(found) };
+    return { ok: false, error: 'revision_conflict', data: sessionRowToObject_(found, groups) };
   }
 
   var ctx = mutate({ row: found.row });
+  if (ctx && ctx.noop) {
+    // mutate 判斷這次操作實際上什麼都沒改（例如沒有上一步可以復原），
+    // 不消耗 revision、不佔用 action_id 名額，避免其他裝置被誤判成版本衝突。
+    return { ok: true, data: sessionRowToObject_(found, groups) };
+  }
   ctx.row.revision = ctx.row.revision + 1;
   ctx.row.updated_at = new Date().toISOString();
   recentIds.push(body.actionId);
@@ -324,7 +322,7 @@ function withSession_(body, mutate) {
   ctx.row.recent_action_ids_json = JSON.stringify(recentIds);
 
   writeRowBack_(sheet, SESSIONS_HEADERS, found.rowIndex, ctx.row);
-  return { ok: true, data: sessionRowToObject_({ row: ctx.row, rowIndex: found.rowIndex }) };
+  return { ok: true, data: sessionRowToObject_({ row: ctx.row, rowIndex: found.rowIndex }, groups) };
 }
 
 function withSessionGroup_(body, mutate) {
@@ -383,6 +381,20 @@ function setGroupField_(sessionId, groupId, field, value) {
 // Apps Script 沒有現成的「依欄位名稱讀寫一列」功能，這裡用標題列自己包一層，
 // 讓上面的商業邏輯可以直接用欄位名稱（例如 row.current_stars），不用管欄位在第幾欄。
 
+// 回傳「最新一堂課」（Sessions 最後一列），不管是進行中還是已結束——
+// 前端要靠 status 自己判斷該顯示「上課中」還是「本節課已結束」畫面。
+// 之前這裡只挑 status==='active' 的列，導致課堂結束後找不到任何符合的列，
+// 投影頁永遠看不到「本節課已結束」，只會顯示成「還沒開始」。
+function findLatestSessionRow_() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSIONS_SHEET);
+  var values = sheet.getDataRange().getValues();
+  if (values.length < 2) return null;
+  var lastIndex = values.length - 1;
+  return { row: rowArrayToObject_(SESSIONS_HEADERS, values[lastIndex]), rowIndex: lastIndex + 1 };
+}
+
+// 找目前是否有進行中的課堂（status==='active'），開課時用來自動結束
+// 上一堂忘記結束的課，避免同時存在兩堂 active 的課互相打架。
 function findActiveSessionRow_() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSIONS_SHEET);
   var values = sheet.getDataRange().getValues();
