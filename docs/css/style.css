@@ -50,17 +50,6 @@ h1, h2, h3 { margin: 0; }
 }
 .app-bar-title { font-weight: 700; font-size: 1.1rem; color: var(--ink); }
 
-.teacher-login-btn {
-  border: none;
-  background: none;
-  color: var(--muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-  padding: 0.4em 0.6em;
-  border-radius: var(--radius-sm);
-}
-.teacher-login-btn:hover { background: var(--accent-soft); color: var(--accent); }
-
 .back-to-display-btn {
   border: none;
   background: var(--accent-soft);
@@ -71,6 +60,9 @@ h1, h2, h3 { margin: 0; }
   padding: 0.5em 0.9em;
   border-radius: var(--radius-sm);
   min-height: 38px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* ---------- 密碼登入視窗 ---------- */
