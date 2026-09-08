@@ -13,9 +13,9 @@
 
 // ---------- 設定 ----------
 
-// 教師 PIN：跟前端 app.js 的 TEACHER_PIN 要保持一致。
+// 教師 PIN：只存在這裡（不進版控），前端不再內建正確答案，登入時才問後端對不對。
 // 之後若換成正式 Google 帳號登入（文件 19.1），這個檢查會被取代，不是本次範圍。
-var TEACHER_PIN = '1234';
+var TEACHER_PIN = '5787';
 
 var SESSIONS_SHEET = 'Sessions';
 var SESSION_GROUPS_SHEET = 'SessionGroups';
@@ -78,6 +78,7 @@ function doPost(e) {
     }
 
     var handlers = {
+      verifyPin: handleVerifyPin_,
       startSession: handleStartSession_,
       addLight: handleAddLight_,
       correctLight: handleCorrectLight_,
@@ -115,6 +116,12 @@ function getCurrentSession_() {
 // ---------- 寫入 action handlers ----------
 // 每個 handler 收到的 body 至少含 { action, pin, actionId }，
 // 除了 startSession 外都還會有 sessionId、revision。
+
+// 前端登入時呼叫：能執行到這裡，代表 doPost 開頭的 pin 檢查已經通過了，
+// 不用再做任何事，回傳成功就好。前端不再內建正確密碼，靠這個動作問後端。
+function handleVerifyPin_(body) {
+  return { ok: true };
+}
 
 function handleStartSession_(body) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SESSIONS_SHEET);

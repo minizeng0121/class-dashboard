@@ -18,8 +18,12 @@
     return global.APP_CONFIG && global.APP_CONFIG.API_URL;
   }
 
+  // 教師密碼不再內建於前端，登入時輸入什麼就記住什麼（只存在瀏覽器記憶體，
+  // 重新整理就會清掉），之後每次 API 呼叫都帶著它，由後端判斷對不對。
+  var enteredPin = null;
+
   function pin() {
-    return global.APP_CONFIG && global.APP_CONFIG.TEACHER_PIN;
+    return enteredPin;
   }
 
   function newActionId() {
@@ -59,6 +63,15 @@
   global.Store = {
     DEFAULT_CLASSES: DEFAULT_CLASSES,
     newActionId: newActionId,
+
+    // 登入時呼叫：先記住輸入的密碼，再問後端對不對。
+    setPin: function (value) {
+      enteredPin = value;
+    },
+
+    verifyPin: function () {
+      return apiPost('verifyPin', {});
+    },
 
     // 回傳 Promise<session|null>；連線失敗時把錯誤往外丟，由呼叫端處理畫面。
     getCurrentSession: function () {

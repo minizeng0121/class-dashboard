@@ -130,12 +130,15 @@
           render();
           showNotice('有其他裝置剛更新過這堂課的資料，畫面已重新整理成最新狀態，請確認後再繼續操作。');
         } else if (res.error === 'invalid_pin') {
+          // 正常情況下登入時就已經驗證過密碼，這裡理論上不會出現；
+          // 真的出現通常是後端密碼中途被改了，直接請使用者重新登入。
           pendingRetry = null;
           removeOp();
           recomputeSession();
           settleSyncState('error');
+          mode = 'display';
           render();
-          showNotice('教師密碼跟後端設定不一致，請確認 js/config.js 與 backend/Code.gs 的 PIN 是否相同。');
+          showNotice('教師密碼驗證失敗，請重新登入。');
         } else {
           removeOp();
           recomputeSession();
@@ -459,21 +462,36 @@
     passwordModal.hidden = true;
   }
 
+  var passwordSubmitBtn = document.getElementById('passwordSubmitBtn');
+
+  // 密碼不再內建於前端，登入時要送到後端問對不對，所以這裡多一次網路來回
+  // （通常 0.5~2 秒）。送出期間先鎖住按鈕，避免使用者連點送出好幾次請求。
   function tryLogin() {
-    var pin = window.APP_CONFIG && window.APP_CONFIG.TEACHER_PIN;
-    if (passwordInput.value === pin) {
-      mode = 'teacher';
-      closePasswordModal();
-      render();
-    } else {
+    if (passwordSubmitBtn.disabled) return;
+    passwordError.hidden = true;
+    passwordSubmitBtn.disabled = true;
+    Store.setPin(passwordInput.value);
+    Store.verifyPin().then(function (res) {
+      passwordSubmitBtn.disabled = false;
+      if (res.ok) {
+        mode = 'teacher';
+        closePasswordModal();
+        render();
+      } else {
+        passwordError.textContent = '密碼錯誤，請再試一次';
+        passwordError.hidden = false;
+      }
+    }).catch(function () {
+      passwordSubmitBtn.disabled = false;
+      passwordError.textContent = '無法連線到後端，請確認網路連線後再試一次';
       passwordError.hidden = false;
-    }
+    });
   }
 
   document.getElementById('teacherLoginBtn').addEventListener('click', openPasswordModal);
   document.getElementById('endedLoginBtn').addEventListener('click', openPasswordModal);
   document.getElementById('passwordCancelBtn').addEventListener('click', closePasswordModal);
-  document.getElementById('passwordSubmitBtn').addEventListener('click', tryLogin);
+  passwordSubmitBtn.addEventListener('click', tryLogin);
   passwordInput.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') tryLogin();
   });
