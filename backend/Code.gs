@@ -69,10 +69,7 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    // e.postData.contents 在中文等多位元組字元上有已知的編碼問題（會把 UTF-8
-    // 位元組誤讀成 Latin-1），這裡用 escape/decodeURIComponent 轉回正確的 UTF-8。
-    var rawBody = decodeURIComponent(escape(e.postData.contents));
-    var body = JSON.parse(rawBody);
+    var body = JSON.parse(decodeUtf8Fallback_(e.postData.contents));
     if (body.pin !== TEACHER_PIN) {
       return jsonResponse_({ ok: false, error: 'invalid_pin' });
     }
@@ -103,6 +100,21 @@ function doPost(e) {
 function jsonResponse_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// e.postData.contents 在中文等多位元組字元上有已知的編碼問題：Apps Script
+// 有時候會把 UTF-8 位元組誤讀成 Latin-1，把每個位元組當成一個字元。
+// escape()+decodeURIComponent() 可以修好「被誤讀」的字串，但如果字串其實
+// 已經是正確的（本來就有正常的中文字），同一招反而會丟出 URIError（因為
+// escape() 對超過一個位元組的字元會編成 decodeURIComponent 看不懂的 %u 格式）。
+// 用 try/catch 讓它自己判斷：try 成功代表「原本被誤讀，已經修好」；
+// try 失敗（丟例外）就代表「原本就是對的」，直接用原始內容，不強改。
+function decodeUtf8Fallback_(raw) {
+  try {
+    return decodeURIComponent(escape(raw));
+  } catch (e) {
+    return raw;
+  }
 }
 
 // ---------- 讀取 ----------
