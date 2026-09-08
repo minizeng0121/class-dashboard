@@ -6,5 +6,5 @@
  * 看得到真正的密碼。
  */
 window.APP_CONFIG = {
-  API_URL: 'https://script.google.com/macros/s/AKfycbwfSVQtJjWxnCdf0TXSIIiniYcRYsQ7T1bL2_Pvt7yKjDbgRBlrZ2t_5BcR2TS-QWJsfA/exec'
+  API_URL: 'https://script.google.com/macros/s/AKfycbzGC_uGZCBVLWIgZazazjiUIw_z7cFLhZIGqEOW_ykQRijtc7EQEp0hLgyglN0rGB2Opw/exec'
 };
