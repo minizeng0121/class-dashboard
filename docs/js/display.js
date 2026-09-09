@@ -96,9 +96,20 @@
     return span;
   }
 
+  // Apps Script 回應快慢不一，兩次輪詢的請求／回應順序可能顛倒：慢的那次
+  // 明明先送出，卻晚到，回來的是比較舊的資料，如果直接套用會把畫面上已經
+  // 顯示的新資料蓋回舊的，看起來就像燈號/星等自己在亂跳。用 revision 版本號
+  // 判斷：新回應的版本號比目前畫面還舊，就直接丟棄，不套用。
+  function applyIfNewer(data) {
+    if (session && data && data.sessionId === session.sessionId && data.revision < session.revision) {
+      return; // 過期的輪詢回應，忽略
+    }
+    session = data;
+  }
+
   function refresh() {
     Store.getCurrentSession().then(function (data) {
-      session = data;
+      applyIfNewer(data);
       loadError = null;
       fetchFailed = false;
       render();
@@ -110,7 +121,7 @@
 
   function initialLoad() {
     Store.getCurrentSession().then(function (data) {
-      session = data;
+      applyIfNewer(data);
       loadError = null;
       render();
     }).catch(function (err) {

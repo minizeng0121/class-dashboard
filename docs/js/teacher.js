@@ -87,6 +87,20 @@
     recomputeSession();
   }
 
+  // 專門給「輪詢/切回分頁時的背景讀取」用：Apps Script 回應快慢不一，
+  // 先送出的請求可能比後送出的還晚回來，帶著比較舊的 revision。這種背景
+  // 讀取不像 performAction 那樣有 actionQueue 排隊保證順序，直接套用的話
+  // 會把畫面上已經確認的新資料蓋回舊的，看起來像資料自己在亂跳。
+  // performAction 自己的寫入結果不用經過這層——那是這個裝置剛送出、
+  // 剛確認的結果，一定是目前所知最新的，不會有「更舊」的疑慮。
+  function setConfirmedSessionIfNewer(data) {
+    if (confirmedSession && data && data.sessionId === confirmedSession.sessionId &&
+        data.revision < confirmedSession.revision) {
+      return; // 過期的背景讀取回應，忽略
+    }
+    setConfirmedSession(data);
+  }
+
   function performAction(promiseFactory, applyOptimistic) {
     var op = applyOptimistic ? { applyOptimistic: applyOptimistic } : null;
     if (op) {
@@ -189,7 +203,7 @@
   // 分頁重新可見時呼叫：失敗就靜默略過，畫面維持最後一次成功取得的資料。
   function refreshSession() {
     Store.getCurrentSession().then(function (data) {
-      setConfirmedSession(data);
+      setConfirmedSessionIfNewer(data);
       render();
     }).catch(function () {});
   }
@@ -198,7 +212,7 @@
   // 設定 syncState，不能只靜默略過——render() 裡的 startError 就是看這個。
   function initialLoad() {
     Store.getCurrentSession().then(function (data) {
-      setConfirmedSession(data);
+      setConfirmedSessionIfNewer(data);
       render();
     }).catch(function () {
       syncState = 'error';
